@@ -1,0 +1,50 @@
+# Render blueprint. Render reads this on first deploy and configures the
+# service automatically, so there is nothing to fill in by hand except the
+# two secrets below.
+#
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: options-lens
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      # sync: false means "prompt me for this, don't store it in the repo".
+      - key: MASSIVE_API_KEY
+        sync: false
+      - key: ACCESS_PASSWORD
+        sync: false
+
+      # The container filesystem is not writable at the app path, and on the
+      # free plan there is no persistent disk anyway, so the cache lives in
+      # /tmp. It survives for the life of the running instance and is lost
+      # when the service sleeps.
+      - key: CACHE_PATH
+        value: /tmp/options-lens-cache.sqlite
+
+      # Massive free tier limit. Change to 0 if you upgrade to a paid plan.
+      - key: MASSIVE_RATE_LIMIT
+        value: "5"
+
+      - key: STRIKE_WINDOW
+        value: "0.35"
+      - key: MAX_EXPIRATIONS
+        value: "6"
+
+      # Each contract costs one API call in end-of-day mode. 90 contracts at
+      # 5 calls/min is roughly 18 minutes for a ticker that is not yet cached.
+      # Lower this if you would rather have faster, shallower results.
+      - key: MAX_CONTRACTS_EOD
+        value: "90"
+
+      # Cache the finished analysis for 6 hours. End-of-day data does not
+      # change intraday, so there is nothing to gain from refetching sooner.
+      - key: TTL_SLOW
+        value: "21600"
+      - key: TTL_CHAIN
+        value: "600"

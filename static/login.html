@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Options Lens — sign in</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main style="max-width:380px;margin:16vh auto;">
+  <div class="panel">
+    <h2>Options Lens</h2>
+    <p class="muted">This instance is password protected.</p>
+    <form id="f" style="display:flex;gap:.5rem;margin-top:1rem;">
+      <input id="p" type="password" placeholder="Password"
+             style="flex:1;background:var(--panel-2);border:1px solid var(--line);color:var(--text);padding:.55rem .8rem;border-radius:8px;">
+      <button type="submit">Enter</button>
+    </form>
+    <p id="msg" class="fineprint" style="color:var(--down);"></p>
+  </div>
+</main>
+<script>
+document.getElementById("f").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const res = await fetch("/api/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password: document.getElementById("p").value }),
+  });
+  if (res.ok) location.href = "/";
+  else document.getElementById("msg").textContent = "Wrong password.";
+});
+document.getElementById("p").focus();
+</script>
+</body>
+</html>

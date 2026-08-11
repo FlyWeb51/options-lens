@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Options Lens</title>
+<link rel="icon" href="data:,">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">◎</span>
+    <div>
+      <h1>Options Lens</h1>
+      <p class="tagline">What the options market is pricing in — and where it's stretched</p>
+    </div>
+  </div>
+  <form id="search" autocomplete="off">
+    <input id="ticker" type="text" placeholder="Ticker (e.g. AAPL)" maxlength="10" spellcheck="false">
+    <button type="submit" id="go">Analyse</button>
+    <button type="button" id="refresh" title="Ignore cache and refetch">↻</button>
+  </form>
+</header>
+
+<main id="main">
+
+  <section id="intro" class="panel intro">
+    <h2>Type a ticker to begin</h2>
+    <p>You'll get four things:</p>
+    <ol>
+      <li><strong>Expected move</strong> — the one standard deviation range the option market is charging for, by expiration.</li>
+      <li><strong>Implied probability distribution</strong> — the full curve of where the market prices the stock to land, recovered from the option chain, with odds for every price level.</li>
+      <li><strong>Squeeze score</strong> — a 0–100 read combining short interest, days to cover, daily short volume, dealer gamma positioning and call demand, with every component shown separately.</li>
+      <li><strong>Unusual activity</strong> — contracts where today's volume is abnormal versus what's already open.</li>
+    </ol>
+    <p class="fineprint">These are risk-neutral probabilities: what the market <em>charges</em> for each outcome, which is not the same as what will happen. They embed a risk premium and overstate tail odds. This is a research tool, not advice.</p>
+  </section>
+
+  <section id="progress" class="panel hidden">
+    <h2 id="progress-title">Working…</h2>
+    <div class="bar"><div id="bar-fill"></div></div>
+    <p id="progress-msg" class="muted"></p>
+    <p id="progress-hint" class="fineprint"></p>
+  </section>
+
+  <section id="error" class="panel error hidden"></section>
+
+  <div id="results" class="hidden">
+
+    <section class="panel" id="banner-panel">
+      <div class="headline-row">
+        <div>
+          <h2 id="headline"></h2>
+          <p class="muted" id="subline"></p>
+        </div>
+        <div id="mode-badge" class="badge"></div>
+      </div>
+      <div id="warnings"></div>
+    </section>
+
+    <section class="panel" id="verdict-panel">
+      <h3>The read</h3>
+      <ul id="verdict-list"></ul>
+      <p class="fineprint" id="verdict-caveat"></p>
+    </section>
+
+    <div class="grid-2">
+      <section class="panel" id="move-panel">
+        <h3>Expected move <span class="sub" id="move-expiry"></span></h3>
+        <div id="move-body"></div>
+      </section>
+
+      <section class="panel" id="squeeze-panel">
+        <h3>Squeeze score</h3>
+        <div id="squeeze-body"></div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <h3>Market-implied probability distribution <span class="sub" id="dist-expiry"></span></h3>
+      <p class="muted" id="dist-method"></p>
+      <div class="chart-wrap"><canvas id="dist-chart"></canvas></div>
+      <div id="dist-stats" class="statgrid"></div>
+    </section>
+
+    <section class="panel">
+      <h3>Odds by price level</h3>
+      <p class="muted">Probability of finishing above or below each level at the headline expiration.</p>
+      <div class="table-wrap"><table id="ladder"></table></div>
+    </section>
+
+    <div class="grid-2">
+      <section class="panel">
+        <h3>Dealer gamma profile</h3>
+        <p class="muted" id="gamma-note"></p>
+        <div class="chart-wrap short"><canvas id="gamma-chart"></canvas></div>
+      </section>
+
+      <section class="panel">
+        <h3>Volatility term structure</h3>
+        <div class="table-wrap"><table id="terms"></table></div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <h3>Unusual activity</h3>
+      <p class="muted" id="flow-summary"></p>
+      <div class="table-wrap"><table id="flow"></table></div>
+    </section>
+
+    <section class="panel">
+      <h3>Skew — 25 delta risk reversal</h3>
+      <div class="table-wrap"><table id="skew"></table></div>
+    </section>
+
+    <section class="panel collapsible">
+      <h3><button id="chain-toggle" class="linkbtn">Show full chain (<span id="chain-count"></span> contracts)</button></h3>
+      <div id="chain-wrap" class="table-wrap hidden"><table id="chain"></table></div>
+    </section>
+
+  </div>
+</main>
+
+<footer>
+  <p>Data from Massive.com. Built for research and curiosity, not for investment advice.
+  Option-implied probabilities are risk-neutral and systematically overstate tail outcomes.</p>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
