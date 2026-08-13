@@ -8,6 +8,7 @@ interesting part.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, List, Optional
 
 from .base import ProviderError, fetch_json, ok, unavailable
@@ -93,16 +94,31 @@ async def series_markets(series_ticker: str, limit: int = 40) -> List[Dict[str, 
 
 
 async def dashboard() -> Dict[str, Any]:
-    """The curated macro board."""
+    """The curated macro board.
+
+    Kalshi rate limits bursts, so the series are fetched with a short pause
+    between them and one retry on a rate-limit response. The whole board is
+    cached for 15 minutes afterwards, so this cost is paid rarely.
+    """
     groups: List[Dict[str, Any]] = []
     errors: List[str] = []
 
-    for ticker, label, category in FINANCE_SERIES:
+    for index, (ticker, label, category) in enumerate(FINANCE_SERIES):
+        if index:
+            await asyncio.sleep(0.4)
         try:
             markets = await series_markets(ticker, limit=30)
         except ProviderError as exc:
-            errors.append(f"{label}: {exc}")
-            continue
+            if "rate limited" in str(exc).lower():
+                await asyncio.sleep(2.0)
+                try:
+                    markets = await series_markets(ticker, limit=30)
+                except ProviderError as retry_exc:
+                    errors.append(f"{label}: {retry_exc}")
+                    continue
+            else:
+                errors.append(f"{label}: {exc}")
+                continue
         if not markets:
             continue
         markets.sort(key=lambda m: -(m.get("volume") or 0))
