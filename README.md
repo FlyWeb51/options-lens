@@ -1,11 +1,43 @@
 # Options Lens
 
-A web app where you type a ticker and see what the options market is actually
-pricing in: the expected move, the full probability distribution of where the
-stock might land, whether the name is set up for a squeeze, and which contracts
-are seeing abnormal activity.
+Type a ticker, get eight tabs of analysis: what the options market is pricing,
+what volatility costs, what a trade would pay off, how the business is actually
+performing, who runs it, who they lobby, and what prediction markets think.
 
-Built on the [Massive.com](https://massive.com) market data API.
+## The tabs
+
+| Tab | What's in it | Data source |
+|---|---|---|
+| **Options** | Expected move, market-implied probability distribution, odds by price level, squeeze score, dealer gamma, unusual activity, skew | Massive |
+| **Volatility & Decay** | IV smile by expiry, term structure, implied vs realised volatility (variance risk premium), time-decay curves with break-even and half-life | Massive + computed |
+| **Strategy** | Payoff diagrams for 8 structures, priced from the live chain, with probability of profit taken from the chain's own distribution | Computed |
+| **Fundamentals** | Revenue, margins, EPS, cash flow, buybacks, debt — charted as values or YoY/sequential growth, plus derived margins and returns | SEC EDGAR (free) |
+| **People** | Officers and directors, insider buying and selling, 10b5-1 flags, LinkedIn search links | SEC Form 4 via Massive |
+| **Politics** | Lobbying spend by year, issues pushed, firms hired, named lobbyists, revolving-door hires, bodies contacted | Senate LDA (free) |
+| **Kalshi** | Real-money probabilities on Fed, CPI, jobs, GDP, recession, indices, crypto — plus keyword search | Kalshi (free) |
+| **API Stock** | Every data source: cost, status, what switching it on unlocks | Live registry |
+
+Built on the [Massive.com](https://massive.com) market data API, plus several
+free public sources.
+
+## Speed
+
+A cold ticker on the free Massive tier costs one API call per contract at 5
+calls per minute. The speed selector controls the tradeoff:
+
+| Mode | Contracts | Expiries | Roughly |
+|---|---|---|---|
+| Quick (default) | 26 | 2 | ~5 min |
+| Standard | 54 | 4 | ~11 min |
+| Deep | 96 | 6 | ~19 min |
+
+Results are cached for 6 hours per ticker *per speed mode*, so the second
+person to look at a ticker gets it instantly. Upgrading Massive to Options
+Starter removes this entirely — the whole chain arrives in one call.
+
+**Free Render instances sleep after 15 minutes idle** and lose their cache
+when they do, which also adds ~50 seconds to the first request. That is the
+main reason the site feels slow, and no amount of code fixes it.
 
 ---
 
@@ -171,14 +203,39 @@ a hallmark of squeeze or momentum positioning: people are paying up for upside.
 
 ---
 
+## What is deliberately NOT here
+
+Being straight about the gaps:
+
+- **Analyst consensus / beat-miss.** Real consensus estimates are not
+  available free anywhere reliable. The Fundamentals tab gives you actual
+  reported results and year-over-year growth, which is real data. It does not
+  claim to tell you whether a quarter beat expectations, because that would
+  require inventing the expectation. Add a Finnhub or FMP key to fill this in.
+- **LinkedIn profiles.** Scraping LinkedIn violates their terms. The People
+  tab generates search links instead, which get you to the right person in one
+  click without the app pretending to have data it does not.
+- **A full org chart.** The People tab is built from Form 4 filers, so it
+  covers Section 16 officers and directors who have transacted. Someone who
+  has not filed recently will not appear.
+- **Congressional trading.** Needs a paid source (QuiverQuant). Listed in the
+  API Stock tab.
+
 ## Verifying it works
 
-Two test suites, no framework required:
+Three test suites, no framework required:
 
 ```bash
 python -m tests.test_math      # maths against published reference values
 python -m tests.test_pipeline  # full pipeline with a stubbed API, plus routes
+python -m tests.test_features  # volatility, decay, strategy, SEC, Kalshi, registry
 ```
+
+`test_features` covers the v2 additions: realised volatility against a known
+path, decay curves that must fall monotonically, payoff maths checked against
+closed-form results for calls, puts, spreads and straddles, probability of
+profit that must be near zero expected value on a fairly priced option, SEC
+XBRL parsing including restatement handling, and the API registry.
 
 `test_math` checks Black-Scholes against Hull's textbook values, verifies
 put-call parity to 1e-8, confirms gamma matches a finite difference of delta,

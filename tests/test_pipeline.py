@@ -217,10 +217,10 @@ def install_stubs(chain_snapshot: bool):
     client.detect_capabilities = _detect       # type: ignore[assignment]
 
 
-def run_mode(label: str, chain_snapshot: bool):
+def run_mode(label: str, chain_snapshot: bool, speed: str = "deep"):
     print(f"\n{label}")
     install_stubs(chain_snapshot)
-    result = asyncio.run(analyse_ticker("TEST"))
+    result = asyncio.run(analyse_ticker("TEST", speed=speed))
 
     check("result produced", isinstance(result, dict))
     check("mode is correct",
@@ -295,6 +295,18 @@ def run_mode(label: str, chain_snapshot: bool):
     check("verdict lines produced", len(result["verdict"]["lines"]) >= 3)
     check("chain serialised", len(result["chain"]) == result["contract_count"])
 
+    # v2 additions
+    check("volatility surface built",
+          result["iv_surface"].get("available") is True,
+          str(result["iv_surface"].get("reason")))
+    check("term structure and premium computed",
+          result["vol_terms"].get("available") is True)
+    check("time decay profiles built", result["decay"].get("available") is True,
+          str(result["decay"].get("reason")))
+    check("decay theta is negative",
+          all(p["theta_per_day"] < 0 for p in result["decay"]["profiles"]))
+    check("speed mode recorded", result["speed"] == speed, result["speed"])
+
     # Everything must be JSON serialisable for the API response
     import json
     try:
@@ -340,6 +352,24 @@ if __name__ == "__main__":
           all(c["open_interest"] is None for c in eod["chain"]))
     check("end-of-day mode computes its own volatility",
           all(c["iv_source"] in ("computed", "none") for c in eod["chain"]))
+
+    print("\nSpeed modes change how much is fetched")
+    install_stubs(False)
+    quick = asyncio.run(analyse_ticker("TEST", speed="quick"))
+    standard = asyncio.run(analyse_ticker("TEST", speed="standard"))
+    check("quick fetches fewer contracts than standard",
+          quick["contract_count"] < standard["contract_count"],
+          f"{quick['contract_count']} vs {standard['contract_count']}")
+    check("quick fetches fewer contracts than deep",
+          quick["contract_count"] < eod["contract_count"],
+          f"{quick['contract_count']} vs {eod['contract_count']}")
+    check("quick still produces a usable distribution",
+          quick["distribution"].get("available") is True,
+          str(quick["distribution"].get("reason")))
+    check("quick still produces an expected move",
+          quick["expected_move"].get("available") is True)
+    check("quick covers at most 2 expiries", len(quick["expiries"]) <= 2,
+          str(quick["expiries"]))
 
     test_routes()
 

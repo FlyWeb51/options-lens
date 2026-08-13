@@ -19,6 +19,19 @@ services:
         sync: false
       - key: ACCESS_PASSWORD
         sync: false
+      # Optional: unlocks the campaign finance panel on the Politics tab.
+      # Free key from https://api.open.fec.gov/developers/
+      - key: FEC_API_KEY
+        sync: false
+
+      # SEC asks for a descriptive User-Agent. Fundamentals come from SEC
+      # EDGAR, which is free and needs no key - just this header.
+      - key: SEC_USER_AGENT
+        value: "options-lens/2.0 (github.com/FlyWeb51/options-lens)"
+
+      # quick | standard | deep - how much of the chain a cold ticker pulls.
+      - key: DEFAULT_SPEED
+        value: quick
 
       # The container filesystem is not writable at the app path, and on the
       # free plan there is no persistent disk anyway, so the cache lives in

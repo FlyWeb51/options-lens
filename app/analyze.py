@@ -4,24 +4,39 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from .analytics import decay as decay_mod
 from .analytics import flow as flow_mod
 from .analytics import pricing, squeeze
-from .chain import build_chain, get_avg_daily_volume, get_shares_outstanding
+from .analytics import vol as vol_mod
+from .chain import build_chain, get_daily_history, get_shares_outstanding
 from .config import settings
+from .massive import MassiveError, client
 from .models import Chain
 
 
-async def analyse_ticker(ticker: str, progress=lambda m, p: None) -> Dict[str, Any]:
+async def get_overview(ticker: str) -> Optional[Dict[str, Any]]:
+    try:
+        data = await client.get(
+            f"/v3/reference/tickers/{ticker}", {}, ttl=settings.ttl_slow
+        )
+    except MassiveError:
+        return None
+    return data.get("results") or None
+
+
+async def analyse_ticker(
+    ticker: str, progress=lambda m, p: None, speed: Optional[str] = None
+) -> Dict[str, Any]:
     ticker = ticker.strip().upper()
 
-    chain: Chain = await build_chain(ticker, progress)
+    chain: Chain = await build_chain(ticker, progress, speed)
     if not chain.contracts:
         raise ValueError(
             f"No usable option contracts were returned for {ticker}. "
             "It may not have listed options."
         )
 
-    progress("Computing expected move and probabilities", 76)
+    progress("Computing expected move and probabilities", 74)
     expiries = chain.expiries()
     primary_expiry = _pick_primary_expiry(chain)
     primary = chain.for_expiry(primary_expiry)
@@ -30,15 +45,29 @@ async def analyse_ticker(ticker: str, progress=lambda m, p: None) -> Dict[str, A
     dist = pricing.risk_neutral_distribution(primary, chain.spot, chain.risk_free)
     terms = pricing.term_structure(chain)
 
-    progress("Scanning option flow", 84)
+    progress("Scanning option flow", 80)
     flow = flow_mod.analyse_flow(chain)
     skew = flow_mod.skew_summary(chain)
 
+    progress("Measuring volatility and time decay", 84)
+    history = await get_daily_history(ticker)
+    closes = history.get("closes") or []
+    iv_surface = vol_mod.surface(chain)
+    vol_terms = vol_mod.term_and_premium(chain, closes)
+    decay = decay_mod.analyse(chain)
+
     progress("Checking short interest and dealer gamma", 90)
     short = await squeeze.fetch_short_data(ticker)
-    shares = await get_shares_outstanding(ticker)
+    overview = await get_overview(ticker)
+    shares = None
+    if overview:
+        shares = (overview.get("weighted_shares_outstanding")
+                  or overview.get("share_class_shares_outstanding"))
+    if not shares:
+        shares = await get_shares_outstanding(ticker)
     if not short.get("avg_daily_volume"):
-        short["avg_daily_volume"] = await get_avg_daily_volume(ticker)
+        short["avg_daily_volume"] = history.get("avg_volume")
+
     gex = squeeze.gamma_exposure(chain)
     score = squeeze.squeeze_score(chain, short, gex, flow, shares)
 
@@ -50,14 +79,24 @@ async def analyse_ticker(ticker: str, progress=lambda m, p: None) -> Dict[str, A
         "spot": round(chain.spot, 2),
         "spot_source": chain.spot_source,
         "mode": chain.mode,
+        "speed": chain.speed,
         "risk_free_rate": round(chain.risk_free * 100, 3),
         "shares_outstanding": shares,
+        "company": (overview or {}).get("name"),
+        "cik": (overview or {}).get("cik"),
+        "homepage": (overview or {}).get("homepage_url"),
+        "description": (overview or {}).get("description"),
+        "sector": (overview or {}).get("sic_description"),
         "warnings": chain.warnings,
         "expiries": expiries,
         "primary_expiry": primary_expiry,
         "expected_move": move,
         "distribution": dist,
         "term_structure": terms,
+        "iv_surface": iv_surface,
+        "vol_terms": vol_terms,
+        "decay": decay,
+        "price_history": history.get("bars", [])[-180:],
         "flow": flow,
         "skew": skew,
         "short": short,
@@ -81,7 +120,6 @@ def _pick_primary_expiry(chain: Chain) -> str:
         if len(priced) < 4:
             continue
         dte = contracts[0].dte
-        # Prefer something a week or more out - zero-day chains are noisy.
         proximity = 1.0 / (1.0 + abs(dte - 30) / 30.0)
         score = len(priced) * 0.3 + proximity * 40
         if score > best_score:
@@ -90,7 +128,6 @@ def _pick_primary_expiry(chain: Chain) -> str:
 
 
 def _verdict(chain, move, dist, flow, score, gex) -> Dict[str, Any]:
-    """A short plain-English read of what the numbers are saying together."""
     lines: List[str] = []
 
     if move.get("available"):

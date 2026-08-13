@@ -15,29 +15,33 @@
     <span class="logo">◎</span>
     <div>
       <h1>Options Lens</h1>
-      <p class="tagline">What the options market is pricing in — and where it's stretched</p>
+      <p class="tagline">What the market is pricing — and who's paying for it</p>
     </div>
   </div>
   <form id="search" autocomplete="off">
-    <input id="ticker" type="text" placeholder="Ticker (e.g. AAPL)" maxlength="10" spellcheck="false">
+    <input id="ticker" type="text" placeholder="Ticker" maxlength="10" spellcheck="false">
+    <select id="speed" title="How much of the chain to fetch">
+      <option value="quick">Quick · ~5 min</option>
+      <option value="standard">Standard · ~11 min</option>
+      <option value="deep">Deep · ~19 min</option>
+    </select>
     <button type="submit" id="go">Analyse</button>
     <button type="button" id="refresh" title="Ignore cache and refetch">↻</button>
   </form>
 </header>
 
-<main id="main">
+<nav class="tabs" id="tabs">
+  <button data-tab="options" class="active">Options</button>
+  <button data-tab="vol">Volatility &amp; Decay</button>
+  <button data-tab="strategy">Strategy</button>
+  <button data-tab="fundamentals">Fundamentals</button>
+  <button data-tab="people">People</button>
+  <button data-tab="politics">Politics</button>
+  <button data-tab="kalshi">Kalshi</button>
+  <button data-tab="sources">API Stock</button>
+</nav>
 
-  <section id="intro" class="panel intro">
-    <h2>Type a ticker to begin</h2>
-    <p>You'll get four things:</p>
-    <ol>
-      <li><strong>Expected move</strong> — the one standard deviation range the option market is charging for, by expiration.</li>
-      <li><strong>Implied probability distribution</strong> — the full curve of where the market prices the stock to land, recovered from the option chain, with odds for every price level.</li>
-      <li><strong>Squeeze score</strong> — a 0–100 read combining short interest, days to cover, daily short volume, dealer gamma positioning and call demand, with every component shown separately.</li>
-      <li><strong>Unusual activity</strong> — contracts where today's volume is abnormal versus what's already open.</li>
-    </ol>
-    <p class="fineprint">These are risk-neutral probabilities: what the market <em>charges</em> for each outcome, which is not the same as what will happen. They embed a risk premium and overstate tail odds. This is a research tool, not advice.</p>
-  </section>
+<main id="main">
 
   <section id="progress" class="panel hidden">
     <h2 id="progress-title">Working…</h2>
@@ -48,85 +52,274 @@
 
   <section id="error" class="panel error hidden"></section>
 
-  <div id="results" class="hidden">
+  <!-- ================= OPTIONS ================= -->
+  <div class="tabpane" id="pane-options">
+    <section id="intro" class="panel intro">
+      <h2>Type a ticker to begin</h2>
+      <p class="muted">Eight tabs of data on any US listed company.</p>
+      <ol>
+        <li><strong>Options</strong> — expected move, the full market-implied probability distribution, squeeze scoring, unusual activity.</li>
+        <li><strong>Volatility &amp; Decay</strong> — the IV surface, term structure, implied versus realised volatility, and what time decay actually costs per day.</li>
+        <li><strong>Strategy</strong> — payoff diagrams with probability of profit taken from the chain's own distribution.</li>
+        <li><strong>Fundamentals</strong> — revenue, margins, cash flow and more, with year-over-year growth, charted however you like.</li>
+        <li><strong>People</strong> — officers and directors, what they're doing with their own shares, and a link to find them.</li>
+        <li><strong>Politics</strong> — lobbying spend, the issues pushed, the firms hired and who they contacted.</li>
+        <li><strong>Kalshi</strong> — real-money probabilities on rates, inflation, jobs and growth.</li>
+        <li><strong>API Stock</strong> — every data source, what it costs, and what switching it on would unlock.</li>
+      </ol>
+      <p class="fineprint">Probabilities derived from option prices are risk-neutral: what the market <em>charges</em> for each outcome, which is not a forecast. Research tool, not advice.</p>
+    </section>
 
-    <section class="panel" id="banner-panel">
-      <div class="headline-row">
-        <div>
-          <h2 id="headline"></h2>
-          <p class="muted" id="subline"></p>
+    <div id="results" class="hidden">
+      <section class="panel" id="banner-panel">
+        <div class="headline-row">
+          <div>
+            <h2 id="headline"></h2>
+            <p class="muted" id="subline"></p>
+          </div>
+          <div id="mode-badge" class="badge"></div>
         </div>
-        <div id="mode-badge" class="badge"></div>
+        <div id="warnings"></div>
+      </section>
+
+      <section class="panel" id="verdict-panel">
+        <h3>The read</h3>
+        <ul id="verdict-list"></ul>
+        <p class="fineprint" id="verdict-caveat"></p>
+      </section>
+
+      <div class="grid-2">
+        <section class="panel" id="move-panel">
+          <h3>Expected move <span class="sub" id="move-expiry"></span></h3>
+          <div id="move-body"></div>
+        </section>
+        <section class="panel" id="squeeze-panel">
+          <h3>Squeeze score</h3>
+          <div id="squeeze-body"></div>
+        </section>
       </div>
-      <div id="warnings"></div>
-    </section>
 
-    <section class="panel" id="verdict-panel">
-      <h3>The read</h3>
-      <ul id="verdict-list"></ul>
-      <p class="fineprint" id="verdict-caveat"></p>
-    </section>
-
-    <div class="grid-2">
-      <section class="panel" id="move-panel">
-        <h3>Expected move <span class="sub" id="move-expiry"></span></h3>
-        <div id="move-body"></div>
-      </section>
-
-      <section class="panel" id="squeeze-panel">
-        <h3>Squeeze score</h3>
-        <div id="squeeze-body"></div>
-      </section>
-    </div>
-
-    <section class="panel">
-      <h3>Market-implied probability distribution <span class="sub" id="dist-expiry"></span></h3>
-      <p class="muted" id="dist-method"></p>
-      <div class="chart-wrap"><canvas id="dist-chart"></canvas></div>
-      <div id="dist-stats" class="statgrid"></div>
-    </section>
-
-    <section class="panel">
-      <h3>Odds by price level</h3>
-      <p class="muted">Probability of finishing above or below each level at the headline expiration.</p>
-      <div class="table-wrap"><table id="ladder"></table></div>
-    </section>
-
-    <div class="grid-2">
       <section class="panel">
-        <h3>Dealer gamma profile</h3>
-        <p class="muted" id="gamma-note"></p>
-        <div class="chart-wrap short"><canvas id="gamma-chart"></canvas></div>
+        <h3>Market-implied probability distribution <span class="sub" id="dist-expiry"></span></h3>
+        <p class="muted" id="dist-method"></p>
+        <div class="chart-wrap"><canvas id="dist-chart"></canvas></div>
+        <div id="dist-stats" class="statgrid"></div>
       </section>
 
       <section class="panel">
-        <h3>Volatility term structure</h3>
-        <div class="table-wrap"><table id="terms"></table></div>
+        <h3>Odds by price level</h3>
+        <div class="table-wrap"><table id="ladder"></table></div>
+      </section>
+
+      <div class="grid-2">
+        <section class="panel">
+          <h3>Dealer gamma profile</h3>
+          <p class="muted" id="gamma-note"></p>
+          <div class="chart-wrap short"><canvas id="gamma-chart"></canvas></div>
+        </section>
+        <section class="panel">
+          <h3>Skew — 25 delta risk reversal</h3>
+          <div class="table-wrap"><table id="skew"></table></div>
+        </section>
+      </div>
+
+      <section class="panel">
+        <h3>Unusual activity</h3>
+        <p class="muted" id="flow-summary"></p>
+        <div class="table-wrap"><table id="flow"></table></div>
+      </section>
+
+      <section class="panel collapsible">
+        <h3><button id="chain-toggle" class="linkbtn">Show full chain</button></h3>
+        <div id="chain-wrap" class="table-wrap hidden"><table id="chain"></table></div>
       </section>
     </div>
-
-    <section class="panel">
-      <h3>Unusual activity</h3>
-      <p class="muted" id="flow-summary"></p>
-      <div class="table-wrap"><table id="flow"></table></div>
-    </section>
-
-    <section class="panel">
-      <h3>Skew — 25 delta risk reversal</h3>
-      <div class="table-wrap"><table id="skew"></table></div>
-    </section>
-
-    <section class="panel collapsible">
-      <h3><button id="chain-toggle" class="linkbtn">Show full chain (<span id="chain-count"></span> contracts)</button></h3>
-      <div id="chain-wrap" class="table-wrap hidden"><table id="chain"></table></div>
-    </section>
-
   </div>
+
+  <!-- ================= VOLATILITY ================= -->
+  <div class="tabpane hidden" id="pane-vol">
+    <section class="panel" id="vol-empty"><p class="muted">Run a ticker to see volatility structure.</p></section>
+    <div id="vol-content" class="hidden">
+      <section class="panel">
+        <h3>Implied vs realised volatility</h3>
+        <p class="muted" id="vrp-verdict"></p>
+        <div id="vrp-stats" class="statgrid"></div>
+        <p class="fineprint" id="vrp-explainer"></p>
+      </section>
+      <div class="grid-2">
+        <section class="panel">
+          <h3>Volatility smile by expiry</h3>
+          <div class="chart-wrap"><canvas id="smile-chart"></canvas></div>
+        </section>
+        <section class="panel">
+          <h3>Term structure</h3>
+          <div class="chart-wrap"><canvas id="term-chart"></canvas></div>
+          <p class="muted" id="term-shape"></p>
+        </section>
+      </div>
+      <section class="panel">
+        <h3>Time decay</h3>
+        <p class="muted" id="decay-summary"></p>
+        <div class="chart-wrap"><canvas id="decay-chart"></canvas></div>
+        <div class="table-wrap"><table id="decay-table"></table></div>
+        <p class="fineprint" id="decay-explainer"></p>
+      </section>
+    </div>
+  </div>
+
+  <!-- ================= STRATEGY ================= -->
+  <div class="tabpane hidden" id="pane-strategy">
+    <section class="panel" id="strategy-empty"><p class="muted">Run a ticker first — the payoff engine prices legs from the live chain.</p></section>
+    <div id="strategy-content" class="hidden">
+      <section class="panel">
+        <h3>Build a structure</h3>
+        <div class="controls">
+          <label>Preset <select id="preset"></select></label>
+          <label>Expiry <select id="strategy-expiry"></select></label>
+          <button type="button" id="build">Build</button>
+        </div>
+        <div id="strategy-legs"></div>
+      </section>
+      <section class="panel" id="payoff-panel">
+        <h3>Payoff at expiry <span class="sub" id="payoff-label"></span></h3>
+        <div class="chart-wrap"><canvas id="payoff-chart"></canvas></div>
+        <div id="payoff-stats" class="statgrid"></div>
+        <p class="fineprint" id="payoff-note"></p>
+      </section>
+    </div>
+  </div>
+
+  <!-- ================= FUNDAMENTALS ================= -->
+  <div class="tabpane hidden" id="pane-fundamentals">
+    <section class="panel" id="fund-status"><p class="muted">Run a ticker to load fundamentals.</p></section>
+    <div id="fund-content" class="hidden">
+      <section class="panel">
+        <h3>Metric explorer</h3>
+        <div class="controls">
+          <label>Metric <select id="metric-select"></select></label>
+          <label>Period
+            <select id="fund-timeframe">
+              <option value="quarterly">Quarterly</option>
+              <option value="annual">Annual</option>
+            </select>
+          </label>
+          <label>Show
+            <select id="fund-view">
+              <option value="value">Value</option>
+              <option value="yoy">Year-over-year growth</option>
+              <option value="qoq">Sequential growth</option>
+            </select>
+          </label>
+        </div>
+        <div class="chart-wrap"><canvas id="fund-chart"></canvas></div>
+        <p class="fineprint" id="fund-source"></p>
+      </section>
+      <section class="panel">
+        <h3>Growth scorecard</h3>
+        <div class="table-wrap"><table id="growth-table"></table></div>
+      </section>
+      <section class="panel">
+        <h3>Margins and returns</h3>
+        <div class="table-wrap"><table id="ratio-table"></table></div>
+      </section>
+    </div>
+  </div>
+
+  <!-- ================= PEOPLE ================= -->
+  <div class="tabpane hidden" id="pane-people">
+    <section class="panel" id="people-status"><p class="muted">Run a ticker to load the roster.</p></section>
+    <div id="people-content" class="hidden">
+      <section class="panel" id="company-panel"></section>
+      <section class="panel">
+        <h3>Insider activity</h3>
+        <p class="muted" id="insider-verdict"></p>
+        <div id="insider-stats" class="statgrid"></div>
+      </section>
+      <section class="panel">
+        <h3>Officers, directors and large holders</h3>
+        <div class="table-wrap"><table id="people-table"></table></div>
+      </section>
+      <section class="panel">
+        <h3>Recent transactions</h3>
+        <div class="table-wrap"><table id="insider-table"></table></div>
+        <p class="fineprint" id="insider-caveat"></p>
+      </section>
+    </div>
+  </div>
+
+  <!-- ================= POLITICS ================= -->
+  <div class="tabpane hidden" id="pane-politics">
+    <section class="panel" id="politics-status"><p class="muted">Run a ticker to load lobbying records.</p></section>
+    <div id="politics-content" class="hidden">
+      <section class="panel">
+        <h3>Lobbying spend</h3>
+        <p class="muted" id="lobby-summary"></p>
+        <div class="chart-wrap short"><canvas id="lobby-chart"></canvas></div>
+      </section>
+      <div class="grid-2">
+        <section class="panel">
+          <h3>Issues pushed</h3>
+          <div class="table-wrap"><table id="issue-table"></table></div>
+        </section>
+        <section class="panel">
+          <h3>Who they lobbied</h3>
+          <div class="table-wrap"><table id="target-table"></table></div>
+        </section>
+      </div>
+      <div class="grid-2">
+        <section class="panel">
+          <h3>Firms hired</h3>
+          <div class="table-wrap"><table id="firm-table"></table></div>
+        </section>
+        <section class="panel">
+          <h3>Revolving door</h3>
+          <p class="muted">Lobbyists who previously held the government positions listed.</p>
+          <div class="table-wrap"><table id="revolving-table"></table></div>
+        </section>
+      </div>
+      <section class="panel">
+        <h3>Registered lobbyists</h3>
+        <div class="table-wrap"><table id="lobbyist-table"></table></div>
+      </section>
+      <section class="panel">
+        <h3>Campaign finance</h3>
+        <div id="fec-body"></div>
+      </section>
+      <p class="fineprint" id="lobby-caveat"></p>
+    </div>
+  </div>
+
+  <!-- ================= KALSHI ================= -->
+  <div class="tabpane hidden" id="pane-kalshi">
+    <section class="panel">
+      <h3>Prediction markets</h3>
+      <p class="muted" id="kalshi-note">Real-money probabilities. A contract at 63¢ means the market prices a 63% chance.</p>
+      <div class="controls">
+        <input id="kalshi-q" type="text" placeholder="Search markets (e.g. Tesla, Fed, tariff)">
+        <button type="button" id="kalshi-search">Search</button>
+        <button type="button" id="kalshi-reset">Macro board</button>
+      </div>
+    </section>
+    <div id="kalshi-body"></div>
+  </div>
+
+  <!-- ================= API STOCK ================= -->
+  <div class="tabpane hidden" id="pane-sources">
+    <section class="panel">
+      <h3>API Stock</h3>
+      <p class="muted">Every data source this app can use — what's on, what's off, and what each one would add.</p>
+      <div id="sources-counts" class="statgrid"></div>
+      <p class="fineprint" id="sources-how"></p>
+    </section>
+    <div id="sources-body"></div>
+  </div>
+
 </main>
 
 <footer>
-  <p>Data from Massive.com. Built for research and curiosity, not for investment advice.
-  Option-implied probabilities are risk-neutral and systematically overstate tail outcomes.</p>
+  <p>Options data from Massive. Fundamentals from SEC EDGAR. Lobbying from the US Senate LDA database.
+  Prediction markets from Kalshi. Built for research, not investment advice.
+  Option-implied probabilities are risk-neutral and overstate tail outcomes.</p>
 </footer>
 
 <script src="/static/app.js"></script>

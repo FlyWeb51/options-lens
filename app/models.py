@@ -84,6 +84,7 @@ class Chain:
     risk_free: float = 0.042
     warnings: List[str] = field(default_factory=list)
     spot_source: str = "unknown"
+    speed: str = "standard"
 
     def expiries(self) -> List[str]:
         return sorted({c.expiry for c in self.contracts})

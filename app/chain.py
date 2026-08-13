@@ -83,20 +83,35 @@ async def get_spot(ticker: str) -> Tuple[float, str, Optional[float]]:
     return float(bar["c"]), "previous_close", bar.get("v")
 
 
-async def get_avg_daily_volume(ticker: str, lookback_days: int = 40) -> Optional[float]:
+async def get_daily_history(ticker: str, lookback_days: int = 400) -> Dict[str, Any]:
+    """One call that serves both average volume and realised volatility."""
     end = date.today()
-    start = end - timedelta(days=lookback_days * 2)
+    start = end - timedelta(days=lookback_days)
     try:
         data = await client.get(
             f"/v2/aggs/ticker/{ticker}/range/1/day/{start}/{end}",
-            {"adjusted": "true", "sort": "desc", "limit": lookback_days},
+            {"adjusted": "true", "sort": "asc", "limit": 5000},
             ttl=settings.ttl_slow,
         )
     except MassiveError:
-        return None
+        return {"closes": [], "volumes": [], "avg_volume": None, "bars": []}
+
     rows = data.get("results") or []
-    vols = [r.get("v") for r in rows if r.get("v")]
-    return sum(vols) / len(vols) if vols else None
+    closes = [r["c"] for r in rows if r.get("c")]
+    volumes = [r["v"] for r in rows if r.get("v")]
+    recent = volumes[-40:] if volumes else []
+    bars = [{"t": r.get("t"), "c": r.get("c"), "v": r.get("v")} for r in rows[-260:]]
+    return {
+        "closes": closes,
+        "volumes": volumes,
+        "avg_volume": (sum(recent) / len(recent)) if recent else None,
+        "bars": bars,
+    }
+
+
+async def get_avg_daily_volume(ticker: str, lookback_days: int = 40) -> Optional[float]:
+    history = await get_daily_history(ticker)
+    return history.get("avg_volume")
 
 
 async def get_shares_outstanding(ticker: str) -> Optional[float]:
@@ -117,21 +132,25 @@ async def get_shares_outstanding(ticker: str) -> Optional[float]:
 # Chain building
 # ---------------------------------------------------------------------------
 
-async def build_chain(ticker: str, progress: Progress = _noop) -> Chain:
+async def build_chain(
+    ticker: str, progress: Progress = _noop, speed: Optional[str] = None
+) -> Chain:
     ticker = ticker.strip().upper()
     caps = await client.detect_capabilities()
+    mode = settings.speed(speed)
 
     progress("Fetching underlying price", 5)
     spot, spot_source, _ = await get_spot(ticker)
     risk_free = await get_risk_free_rate()
 
     if caps.chain_snapshot:
-        chain = await _build_from_snapshot(ticker, spot, risk_free, progress)
+        chain = await _build_from_snapshot(ticker, spot, risk_free, progress, mode)
     else:
-        chain = await _build_from_eod(ticker, spot, risk_free, progress)
+        chain = await _build_from_eod(ticker, spot, risk_free, progress, mode)
 
     chain.spot_source = spot_source
     chain.warnings.extend(caps.notes)
+    chain.speed = speed or settings.default_speed
     return chain
 
 
@@ -142,11 +161,12 @@ def _expiry_bounds() -> Tuple[str, str]:
 
 
 async def _build_from_snapshot(
-    ticker: str, spot: float, risk_free: float, progress: Progress
+    ticker: str, spot: float, risk_free: float, progress: Progress,
+    mode: Dict[str, Any],
 ) -> Chain:
     lo_exp, hi_exp = _expiry_bounds()
-    lo_strike = spot * (1 - settings.strike_window)
-    hi_strike = spot * (1 + settings.strike_window)
+    lo_strike = spot * (1 - mode["window"])
+    hi_strike = spot * (1 + mode["window"])
 
     progress("Loading options chain snapshot", 25)
     rows = await client.paginate(
@@ -222,16 +242,17 @@ async def _build_from_snapshot(
         contracts=contracts,
         risk_free=risk_free,
     )
-    _trim_expiries(chain)
+    _trim_expiries(chain, mode["expirations"])
     return chain
 
 
 async def _build_from_eod(
-    ticker: str, spot: float, risk_free: float, progress: Progress
+    ticker: str, spot: float, risk_free: float, progress: Progress,
+    mode: Dict[str, Any],
 ) -> Chain:
     lo_exp, hi_exp = _expiry_bounds()
-    lo_strike = spot * (1 - settings.strike_window)
-    hi_strike = spot * (1 + settings.strike_window)
+    lo_strike = spot * (1 - mode["window"])
+    hi_strike = spot * (1 + mode["window"])
 
     progress("Listing contracts", 10)
     rows = await client.paginate(
@@ -254,7 +275,9 @@ async def _build_from_eod(
         raise MassiveError(f"No listed option contracts found for {ticker}.")
 
     today = date.today()
-    selected = _select_eod_contracts(rows, spot, today)
+    selected = _select_eod_contracts(
+        rows, spot, today, mode["contracts"], mode["expirations"]
+    )
     total = len(selected)
 
     contracts: List[Contract] = []
@@ -310,12 +333,13 @@ async def _build_from_eod(
             "from traded volume instead and is less reliable.",
         ],
     )
-    _trim_expiries(chain)
+    _trim_expiries(chain, mode["expirations"])
     return chain
 
 
 def _select_eod_contracts(
-    rows: List[Dict[str, Any]], spot: float, today: date
+    rows: List[Dict[str, Any]], spot: float, today: date,
+    budget: int, max_expirations: int,
 ) -> List[Dict[str, Any]]:
     """Pick the most informative contracts within the request budget.
 
@@ -331,11 +355,10 @@ def _select_eod_contracts(
             continue
         by_expiry.setdefault(expiry, []).append(row)
 
-    expiries = sorted(by_expiry)[: settings.max_expirations]
+    expiries = sorted(by_expiry)[:max_expirations]
     if not expiries:
         return []
 
-    budget = settings.max_contracts_eod
     # Weight the front expirations more heavily - that is where the
     # tradeable signal lives.
     weights = [1.0 / (i + 1) ** 0.6 for i in range(len(expiries))]
@@ -374,6 +397,6 @@ def _fill_missing_analytics(c: Contract, spot: float, risk_free: float) -> None:
         c.theta = c.theta if c.theta is not None else g.theta
 
 
-def _trim_expiries(chain: Chain) -> None:
-    keep = set(chain.expiries()[: settings.max_expirations])
+def _trim_expiries(chain: Chain, max_expirations: int) -> None:
+    keep = set(chain.expiries()[:max_expirations])
     chain.contracts = [c for c in chain.contracts if c.expiry in keep]

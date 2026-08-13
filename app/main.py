@@ -19,11 +19,15 @@ from fastapi import Cookie, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .analyze import analyse_ticker
-from .config import BASE_DIR, settings
+from .analytics import strategy as strategy_mod
+from .analyze import analyse_ticker, get_overview
+from .config import SPEED_MODES, BASE_DIR, settings
 from .massive import MassiveError, client
+from .providers import base as provider_base
+from .providers import fec, kalshi, lobbying, people, sec
+from .sources import registry
 
-app = FastAPI(title="Options Lens", version="1.0.0")
+app = FastAPI(title="Options Lens", version="2.0.0")
 
 STATIC_DIR = BASE_DIR / "static"
 CACHE_PREFIX = "analysis:"
@@ -83,12 +87,14 @@ async def login_page():
 class Job:
     id: str
     ticker: str
+    speed: str = "quick"
     status: str = "running"       # running | done | error
     progress: float = 0.0
     message: str = "Starting"
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     started_at: float = field(default_factory=time.time)
+    cache_key: str = ""
 
     def public(self) -> Dict[str, Any]:
         return {
@@ -114,13 +120,13 @@ async def _run_job(job: Job) -> None:
         job.progress = pct
 
     try:
-        result = await analyse_ticker(job.ticker, progress)
+        result = await analyse_ticker(job.ticker, progress, job.speed)
         job.result = result
         job.status = "done"
         job.progress = 100.0
         job.message = "Complete"
         ttl = settings.ttl_slow if result.get("mode") == "endofday" else settings.ttl_chain
-        await client.cache.set(CACHE_PREFIX + job.ticker, result, ttl)
+        await client.cache.set(job.cache_key or (CACHE_PREFIX + job.ticker), result, ttl)
     except MassiveError as exc:
         job.status = "error"
         job.error = str(exc)
@@ -131,7 +137,7 @@ async def _run_job(job: Job) -> None:
         job.status = "error"
         job.error = f"Unexpected error: {exc}"
     finally:
-        ACTIVE_BY_TICKER.pop(job.ticker, None)
+        ACTIVE_BY_TICKER.pop(job.cache_key or job.ticker, None)
 
 
 @app.post("/api/analyze")
@@ -146,11 +152,16 @@ async def start_analysis(payload: Dict[str, Any]):
         )
 
     force = bool((payload or {}).get("refresh"))
+    speed = str((payload or {}).get("speed") or settings.default_speed).lower()
+    if speed not in SPEED_MODES:
+        speed = settings.default_speed
+
+    cache_key = f"{CACHE_PREFIX}{ticker}:{speed}"
 
     if not force:
-        cached = await client.cache.get(CACHE_PREFIX + ticker)
+        cached = await client.cache.get(cache_key)
         if cached:
-            age = await client.cache.age(CACHE_PREFIX + ticker)
+            age = await client.cache.age(cache_key)
             return {
                 "status": "done",
                 "cached": True,
@@ -159,17 +170,18 @@ async def start_analysis(payload: Dict[str, Any]):
             }
 
     async with _job_lock:
-        existing = ACTIVE_BY_TICKER.get(ticker)
+        existing = ACTIVE_BY_TICKER.get(cache_key)
         if existing and existing in JOBS:
             return {"status": "running", "job_id": existing, "joined_existing": True}
 
-        job = Job(id=uuid.uuid4().hex[:12], ticker=ticker)
+        job = Job(id=uuid.uuid4().hex[:12], ticker=ticker, speed=speed)
         JOBS[job.id] = job
-        ACTIVE_BY_TICKER[ticker] = job.id
+        ACTIVE_BY_TICKER[cache_key] = job.id
+        job.cache_key = cache_key
         asyncio.create_task(_run_job(job))
 
     _prune_jobs()
-    return {"status": "running", "job_id": job.id}
+    return {"status": "running", "job_id": job.id, "speed": speed}
 
 
 @app.get("/api/job/{job_id}")
@@ -200,7 +212,123 @@ async def capabilities():
     if not settings.has_key:
         return {"error": "No API key configured."}
     caps = await client.detect_capabilities()
-    return {"capabilities": caps.as_dict(), "usage": client.stats()}
+    return {"capabilities": caps.as_dict(), "usage": client.stats(),
+            "speed_modes": SPEED_MODES, "default_speed": settings.default_speed}
+
+
+@app.get("/api/sources")
+async def api_sources():
+    """API Stock - the data source bookmark."""
+    return registry()
+
+
+# ---------------------------------------------------------------------------
+# Company pages. Each is independent so a failure in one never blanks another.
+# ---------------------------------------------------------------------------
+
+def _clean_ticker(ticker: str) -> str:
+    ticker = (ticker or "").strip().upper()
+    if not ticker or not ticker.replace(".", "").replace("-", "").isalnum():
+        raise HTTPException(status_code=400, detail="Invalid ticker symbol.")
+    return ticker
+
+
+@app.get("/api/fundamentals/{ticker}")
+async def fundamentals(ticker: str, timeframe: str = "quarterly"):
+    ticker = _clean_ticker(ticker)
+    overview = await get_overview(ticker)
+    data = await sec.fundamentals(
+        ticker,
+        cik_hint=(overview or {}).get("cik"),
+        quarterly=(timeframe != "annual"),
+    )
+    if data.get("available"):
+        data["ratios"] = sec.derive_ratios(data["metrics"])
+        data["company"] = (overview or {}).get("name") or data.get("entity")
+    return data
+
+
+@app.get("/api/people/{ticker}")
+async def people_page(ticker: str, days: int = 365):
+    ticker = _clean_ticker(ticker)
+    overview = await get_overview(ticker)
+    company = (overview or {}).get("name", "")
+    insider_data = await people.insiders(ticker, company, days)
+    leadership = await people.leadership(ticker, overview, insider_data)
+    return {
+        "ticker": ticker,
+        "company": company,
+        "insiders": insider_data,
+        "leadership": leadership,
+        "overview": {
+            "name": company,
+            "description": (overview or {}).get("description"),
+            "homepage": (overview or {}).get("homepage_url"),
+            "employees": (overview or {}).get("total_employees"),
+            "sector": (overview or {}).get("sic_description"),
+            "address": (overview or {}).get("address"),
+        } if overview else None,
+    }
+
+
+@app.get("/api/politics/{ticker}")
+async def politics(ticker: str):
+    ticker = _clean_ticker(ticker)
+    overview = await get_overview(ticker)
+    company = (overview or {}).get("name", ticker)
+
+    lobby = await lobbying.lobbying(company, ticker)
+    committees = await fec.committees(company)
+    return {"ticker": ticker, "company": company,
+            "lobbying": lobby, "committees": committees}
+
+
+@app.get("/api/politics/{ticker}/committee/{committee_id}")
+async def committee_detail(ticker: str, committee_id: str):
+    return await fec.disbursements(committee_id)
+
+
+@app.get("/api/kalshi")
+async def kalshi_board():
+    return await kalshi.dashboard()
+
+
+@app.get("/api/kalshi/search")
+async def kalshi_search(q: str):
+    return await kalshi.search(q)
+
+
+@app.post("/api/strategy")
+async def strategy(payload: Dict[str, Any]):
+    """Payoff and market-implied probability of profit for a structure."""
+    spot = float(payload.get("spot") or 0)
+    if spot <= 0:
+        raise HTTPException(status_code=400, detail="A spot price is required.")
+
+    legs = payload.get("legs")
+    preset = payload.get("preset")
+    density = payload.get("density") or None
+
+    if preset:
+        built = strategy_mod.build_from_chain(
+            preset, payload.get("chain") or [], spot, payload.get("expiry") or ""
+        )
+        if not built.get("available"):
+            return built
+        legs = built["legs"]
+        label = built["label"]
+    else:
+        label = payload.get("label", "Custom structure")
+
+    result = strategy_mod.evaluate(legs or [], spot, density)
+    result["label"] = label
+    return result
+
+
+@app.get("/api/strategy/presets")
+async def strategy_presets():
+    return {"presets": [{"key": k, "label": v["label"]}
+                        for k, v in strategy_mod.PRESETS.items()]}
 
 
 @app.on_event("startup")
@@ -211,6 +339,7 @@ async def startup() -> None:
 @app.on_event("shutdown")
 async def shutdown() -> None:
     await client.close()
+    await provider_base.close()
 
 
 # ---------------------------------------------------------------------------
